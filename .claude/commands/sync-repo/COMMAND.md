@@ -70,18 +70,20 @@ Generates/updates documentation files:
 
 ### 6. Create PR (unless `--no-pr`)
 
-1. Creates branch: `chore/doc-sync-[date]`
-2. Commits documentation changes
-3. Pushes branch to remote
-4. Creates PR with standard title and labels
+**CRITICAL:** The branch creation MUST follow this exact sequence to ensure the PR only contains documentation commits:
 
-## PR Creation
+1. `git fetch origin` - Fetch latest from remote
+2. `git checkout {default-branch}` - Checkout default branch (develop/main)
+3. `git pull origin {default-branch}` - Pull latest changes
+4. `git checkout -b chore/doc-sync-{date}` - Create feature branch from clean default branch
+5. `git add catalog-info.yaml README.md INTEGRATIONS.md` - Stage documentation files
+6. `git commit -m "docs: Update documentation ({date})"` - Commit docs
+7. `git push --set-upstream origin chore/doc-sync-{date}` - Push branch
+8. `gh pr create` - Create PR with standard title and labels
 
-When `--no-pr` is NOT used:
-
-- **Branch name:** `chore/doc-sync-[date]` (e.g., `chore/doc-sync-2025-01-06`)
-- **PR title:** `docs: Update documentation ([date])`
-- **PR labels:** `documentation`, `automated`
+**Branch name:** `chore/doc-sync-[date]` (e.g., `chore/doc-sync-2025-01-06`)
+**PR title:** `docs: Update documentation ([date])`
+**PR labels:** `documentation`, `automated`
 
 ## Example Output
 
@@ -106,7 +108,9 @@ Generating documentation...
 ✓ INTEGRATIONS.md unchanged
 
 Creating PR...
-✓ Branch created: chore/doc-sync-2025-01-06
+✓ Checked out main and pulled latest
+✓ Created branch: chore/doc-sync-2025-01-06
+✓ Committed documentation changes
 ✓ PR created: https://github.com/Astrabit-CPT/user-service/pull/142
 
 # Sync Complete: user-service

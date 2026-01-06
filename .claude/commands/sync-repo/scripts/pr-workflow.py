@@ -108,13 +108,30 @@ def has_uncommitted_changes(repo_path: Path) -> bool:
     return bool(result.stdout.strip())
 
 
-def create_branch(repo_path: Path, branch_name: str, default_branch: str = "main") -> bool:
-    """Create and checkout a new branch from the default branch."""
-    # First, reset to ensure we're starting from clean default branch
-    run_command(["git", "fetch", "origin"], cwd=repo_path)
-    run_command(["git", "reset", "--hard", f"origin/{default_branch}"], cwd=repo_path)
 
-    # Create and checkout new branch
+
+def create_branch(repo_path: Path, branch_name: str, default_branch: str = "main") -> bool:
+    """Create and checkout a new branch from the default branch.
+
+    CRITICAL WORKFLOW - ensures PR only contains doc commit:
+    1. Fetch latest from remote
+    2. Checkout default branch (develop/main)
+    3. Pull latest changes
+    4. Create and checkout new branch from current HEAD
+    """
+    run_command(["git", "fetch", "origin"], cwd=repo_path)
+    
+    # Checkout default branch
+    result = run_command(["git", "checkout", default_branch], cwd=repo_path)
+    if result.returncode != 0:
+        result = run_command(["git", "checkout", f"origin/{default_branch}", "-b", default_branch], cwd=repo_path)
+        if result.returncode != 0:
+            return False
+    
+    # Pull latest changes
+    run_command(["git", "pull", "origin", default_branch], cwd=repo_path)
+    
+    # Create new branch
     result = run_command(["git", "checkout", "-b", branch_name], cwd=repo_path)
     return result.returncode == 0
 

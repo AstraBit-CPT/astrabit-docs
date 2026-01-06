@@ -1,0 +1,40 @@
+apiVersion: astrabit.io/v1
+kind: Component
+metadata:
+  name: astrabit-docs
+  description: service component
+  tags:
+    -
+    -
+spec:
+  type: service
+  category: backend
+  domain: unknown
+  owner: unknown
+  lifecycle: production
+  runtime: unknown
+  framework: none
+  dependsOn:
+    -
+      component: database
+      type: database
+    -
+      component: kafka
+      type: message-queue
+  eventProducers:
+    -
+      name: events
+      type: kafka
+      topic: unknown
+      schema: unknown
+  eventConsumers:
+    -
+      name: events
+      type: kafka
+      topic: unknown
+      group: astrabit-docs-group
+  providesApis:
+    -
+      name: Astrabit-docs API
+      type: REST
+      definition: ./openapi.yaml

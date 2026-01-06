@@ -99,6 +99,83 @@ Scripts are in `.claude/commands/sync-repo/scripts/` and `.claude/skills/*/scrip
 
 Scripts can be executed without reading into context to save tokens.
 
+## Shared Library Documentation
+
+### Identifying Shared Libraries
+
+Shared libraries in the AstraBit ecosystem are repositories that:
+- Are published as npm packages (`@astrabit-cpt/*`)
+- Contain reusable code used by multiple services
+- Do not have consumed APIs (pure libraries)
+- Are referenced via `package.json` dependencies or `catalog-info.yaml`
+
+**Key Shared Libraries:**
+| Repository | Purpose |
+|------------|---------|
+| `microservice-shared` | Base controllers, auth, database repositories, gRPC client/server, Redis, error handling, logging |
+| `exchange-socket-shared` | Broadcast caching (ab-cache), micro-candle, store-prices |
+| `event-socket-shared` | Event-related socket utilities |
+| `astrabit-proto` | gRPC protocol definitions |
+| `glob-proto` | Domain event protocol definitions |
+
+### Documentation Strategy for Shared Libraries
+
+When generating documentation for shared libraries, always document:
+
+1. **In the library's own context** (`INTEGRATIONS.md`):
+   - What the library provides (exports, classes, functions)
+   - Key patterns and abstractions
+   - Configuration requirements
+   - **Consumer List** - All repositories that use this library
+
+2. **In consumer repositories** (`INTEGRATIONS.md`):
+   - Which shared libraries are used
+   - What specific components are imported/extended
+   - How the library is configured/wired up
+   - Link back to the library's documentation
+
+### Broadcast Caching Pattern Documentation
+
+The `exchange-socket-shared/ab-cache` module implements a **broadcast caching** pattern:
+
+**Publisher (e.g., exchange-service):**
+- Periodically reloads configuration from database
+- Computes hash to detect changes
+- Publishes updates to Redis pub/sub channels
+- Channel format: `{service-name}:{entity-type}:update`
+
+**Consumer (e.g., exchange-gateway):**
+- Uses `BaseConfigService` from `exchange-socket-shared/ab-cache`
+- Subscribes to Redis channel on initialization
+- Updates local in-memory cache on message receipt
+- Emits via RxJS Observable for reactive consumers
+
+**Example Channels:**
+- `exchange-service:get-exchange-list:update`
+- `exchange-service:get-exchange-pair-list:update`
+- `trading-pair-service:get-trading-pair-list:update`
+
+When documenting services that use broadcast caching:
+1. Identify which Redis channels the service subscribes to
+2. Identify which service/gateway is the publisher
+3. Document the data structure being broadcast
+4. Note any RxJS Observables exposed for consumers
+
+### Cross-Repository Dependency Tracking
+
+For each repository, scripts should:
+1. Parse `package.json` for `@astrabit-cpt/*` dependencies
+2. Parse `catalog-info.yaml` for `dependsOn` entries
+3. Map shared libraries to their consuming services
+4. Generate bidirectional integration references
+
+### Service Classification - Library Type
+
+When classifying shared libraries in `catalog-info.yaml`:
+- Use `type: library` for pure utility/shared code repos
+- Libraries should have empty `consumes` array (no APIs consumed)
+- Libraries should populate `provides` with exported packages/modules
+
 ## Gitignore Rules
 
 - `repos/` - Cloned repositories are ephemeral
