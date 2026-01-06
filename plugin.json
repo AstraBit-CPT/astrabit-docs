@@ -1,0 +1,19 @@
+{
+  "name": "astrabit-docs",
+  "description": "AstraBit Documentation Project - Claude skills for generating documentation",
+  "version": "1.0.0",
+  "author": "AstraBit",
+  "skills": [
+    "./skills/doc-coauthoring",
+    "./skills/repo-docs",
+    "./skills/repo-metadata",
+    "./skills/arch-view",
+    "./skills/docx",
+    "./skills/xlsx",
+    "./skills/pptx",
+    "./skills/pdf"
+  ],
+  "commands": [
+    "./commands/sync-docs"
+  ]
+}
