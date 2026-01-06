@@ -21,8 +21,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 from pr_workflow import PRWorkflow, check_existing_pr, get_branch_name
 
 
-def run_command(cmd: List[str], cwd: Optional[Path] = None) -> str:
-    """Run a command and return output."""
+def run_command(cmd: List[str], cwd: Optional[Path] = None) -> subprocess.CompletedProcess:
+    """Run a command and return the CompletedProcess result."""
     result = subprocess.run(
         cmd,
         cwd=cwd,
@@ -30,7 +30,15 @@ def run_command(cmd: List[str], cwd: Optional[Path] = None) -> str:
         text=True,
         check=False
     )
-    return result.stdout
+    return result
+
+
+# Repos that are archived or read-only (skip these)
+READONLY_REPOS = {
+    "abit-be", "abit-rest", "abraxas-gl", "security-audit",
+    "abit-frontend", "abit-web",
+    "ZammadTicketImport", "DiscordAttachmentExtract",  # External tools
+}
 
 
 def fetch_repos(org: str = "Astrabit-CPT") -> List[Dict[str, Any]]:
@@ -38,17 +46,26 @@ def fetch_repos(org: str = "Astrabit-CPT") -> List[Dict[str, Any]]:
     script_path = Path(__file__).parent / "fetch-repos.sh"
     if not script_path.exists():
         # Fallback: run gh directly
-        output = run_command([
-            "gh", "repo", list, org,
+        result = run_command([
+            "gh", "repo", "list", org,
             "--json", "name,url,updatedAt,isArchived,visibility",
             "--limit", "500"
         ])
     else:
-        output = run_command(["bash", str(script_path), org])
+        result = run_command(["bash", str(script_path), org])
 
     try:
-        repos = json.loads(output)
-        return repos
+        repos = json.loads(result.stdout)
+        # Filter out archived repos and known read-only repos
+        filtered = []
+        for repo in repos:
+            name = repo.get("name", "")
+            if repo.get("isArchived", False):
+                continue
+            if name in READONLY_REPOS:
+                continue
+            filtered.append(repo)
+        return filtered
     except json.JSONDecodeError:
         print(f"Error: Failed to parse repository list", file=sys.stderr)
         return []
@@ -113,7 +130,7 @@ def clone_or_update_repo(repo: Dict[str, Any], repos_dir: Path) -> tuple[str, st
                 ["git", "log", "-1", "--format=%h %ci"],
                 cwd=repo_path
             )
-            last_commit = date_output.strip() if date_output else ""
+            last_commit = date_output.stdout.strip() if date_output.stdout else ""
 
             return name, f"updated {default_branch} ({last_commit[:20]})"
         else:
@@ -130,7 +147,7 @@ def clone_or_update_repo(repo: Dict[str, Any], repos_dir: Path) -> tuple[str, st
                     ["git", "rev-parse", "--abbrev-ref", "HEAD"],
                     cwd=repo_path
                 )
-                branch = branch_output.strip() if branch_output else "unknown"
+                branch = branch_output.stdout.strip() if branch_output.stdout else "unknown"
                 return name, f"cloned ({branch})"
             else:
                 return name, "error (clone failed)"
@@ -163,12 +180,12 @@ def clone_or_update_all(repos: List[Dict[str, Any]], repos_dir: Path,
 def get_last_commit_date(repo_path: Path) -> Optional[datetime]:
     """Get the last commit date for a repository."""
     try:
-        output = run_command(
+        result = run_command(
             ["git", "log", "-1", "--format=%ci"],
             cwd=repo_path
         )
-        if output.strip():
-            return datetime.fromisoformat(output.strip()[:19])
+        if result.stdout.strip():
+            return datetime.fromisoformat(result.stdout.strip()[:19])
     except Exception:
         pass
     return None
@@ -260,6 +277,11 @@ def sync_docs(repos: List[Dict[str, Any]], repos_dir: Path,
         if not repo_path.exists():
             continue
 
+        # Skip the docs plugin repo itself
+        if name == "astrabit-docs":
+            report["skipped"].append(name)
+            continue
+
         if needs_update(repo_path, force):
             need_update.append((name, repo_path))
         else:
@@ -273,66 +295,109 @@ def sync_docs(repos: List[Dict[str, Any]], repos_dir: Path,
     if create_prs:
         branch_name = get_branch_name()
         print(f"Using branch: {branch_name}")
+    else:
+        branch_name = None
 
-    # Process in parallel (in real implementation, this would launch subagents)
-    with ThreadPoolExecutor(max_workers=parallel) as executor:
-        futures = {
-            executor.submit(process_repo_docs, name, path): (name, path)
-            for name, path in need_update
-        }
+    # Get the process-repo-pr.py script path
+    process_script = Path(__file__).parent / "process-repo-pr.py"
 
-        for future in as_completed(futures):
-            try:
-                result = future.result()
-                repo_name = result["name"]
+    if not create_prs or dry_run or not process_script.exists():
+        # Use the placeholder for dry-run or when script doesn't exist
+        with ThreadPoolExecutor(max_workers=parallel) as executor:
+            futures = {
+                executor.submit(process_repo_docs, name, path): (name, path)
+                for name, path in need_update
+            }
 
-                if not result["docs_updated"] and not result.get("changes"):
-                    # No docs needed updating
-                    report["skipped"].append(repo_name)
-                    continue
+            for future in as_completed(futures):
+                try:
+                    result = future.result()
+                    repo_name = result["name"]
 
-                if create_prs and workflow:
-                    # Check for existing PR
-                    existing_pr = check_existing_pr(repo_name, org, workflow.branch_name)
-                    if existing_pr:
+                    if not result["docs_updated"] and not result.get("changes"):
                         report["skipped"].append(repo_name)
-                        print(f"  {repo_name}: skipped (existing PR #{existing_pr['number']})")
                         continue
 
-                    if dry_run:
-                        # In dry run, just report what would happen
+                    if create_prs and workflow:
+                        # Check for existing PR
+                        existing_pr = check_existing_pr(repo_name, org, workflow.branch_name)
+                        if existing_pr:
+                            report["skipped"].append(repo_name)
+                            print(f"  {repo_name}: skipped (existing PR #{existing_pr['number']})")
+                            continue
+
+                    report["updated"].append({
+                        "repo": repo_name,
+                        "changes": result.get("changes", []),
+                        "docs": result["docs_updated"],
+                        "pr_url": f"https://github.com/{org}/{repo_name}/pull/dry-run" if dry_run else "Pending...",
+                    })
+                except Exception as e:
+                    name, _ = futures[future]
+                    report["failed"].append({"repo": name, "error": str(e)})
+    else:
+        # Use the actual process-repo-pr.py script
+        def process_repo(name: str, repo_path: Path) -> Dict[str, Any]:
+            """Process a single repo with the process-repo-pr.py script."""
+            # Check for existing PR first
+            if workflow:
+                existing_pr = check_existing_pr(name, org, branch_name)
+                if existing_pr:
+                    return {"repo": name, "status": "skipped", "existing_pr": existing_pr}
+
+            result = run_command([
+                "py", str(process_script),
+                name, str(repos_dir), org, branch_name
+            ])
+
+            if result.returncode != 0:
+                return {"repo": name, "status": "failed", "error": result.stderr}
+
+            # Parse the result line
+            for line in result.stdout.split("\n"):
+                if line.startswith("__RESULT__:"):
+                    try:
+                        data = json.loads(line[len("__RESULT__:"):])
+                        return {"repo": name, "status": "created", "pr_url": data.get("pr_url")}
+                    except json.JSONDecodeError:
+                        pass
+
+            return {"repo": name, "status": "unknown"}
+
+        with ThreadPoolExecutor(max_workers=parallel) as executor:
+            futures = {
+                executor.submit(process_repo, name, path): (name, path)
+                for name, path in need_update
+            }
+
+            for i, future in enumerate(as_completed(futures), 1):
+                try:
+                    result = future.result()
+                    repo_name = result["repo"]
+
+                    if result["status"] == "skipped":
+                        report["skipped"].append(repo_name)
+                        print(f"  [{i}/{len(need_update)}] {repo_name}: skipped (existing PR)")
+                    elif result["status"] == "created":
                         report["updated"].append({
                             "repo": repo_name,
-                            "changes": result.get("changes", []),
-                            "docs": result["docs_updated"],
-                            "pr_url": f"https://github.com/{org}/{repo_name}/pull/dry-run",
+                            "pr_url": result.get("pr_url"),
+                            "changes": ["Generated catalog-info.yaml"],
+                            "docs": ["catalog-info.yaml"],
                         })
+                        print(f"  [{i}/{len(need_update)}] {repo_name}: PR created")
+                    elif result["status"] == "failed":
+                        report["failed"].append({
+                            "repo": repo_name,
+                            "error": result.get("error", "Unknown error")
+                        })
+                        print(f"  [{i}/{len(need_update)}] {repo_name}: failed")
                     else:
-                        # TODO: Actually launch subagent to generate docs here
-                        # For now, just report what would be done
-                        report["updated"].append({
-                            "repo": repo_name,
-                            "changes": result.get("changes", []),
-                            "docs": result["docs_updated"],
-                            "pending_pr": True,  # PR would be created after docs generated
-                        })
-                else:
-                    # No PR creation - just report
-                    if dry_run:
-                        report["updated"].append({
-                            "repo": repo_name,
-                            "changes": result.get("changes", []),
-                            "docs": result["docs_updated"],
-                        })
-                    else:
-                        report["updated"].append({
-                            "repo": repo_name,
-                            "changes": result.get("changes", []),
-                            "docs": result["docs_updated"],
-                        })
-            except Exception as e:
-                name, _ = futures[future]
-                report["failed"].append({"repo": name, "error": str(e)})
+                        print(f"  [{i}/{len(need_update)}] {repo_name}: {result['status']}")
+                except Exception as e:
+                    name, _ = futures[future]
+                    report["failed"].append({"repo": name, "error": str(e)})
+                    print(f"  [{i}/{len(need_update)}] {name}: error - {e}")
 
     return report
 
