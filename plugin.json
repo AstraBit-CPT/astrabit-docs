@@ -11,6 +11,6 @@
     "./skills/skill-creator"
   ],
   "commands": [
-    "./commands/sync-docs"
+    "./commands/sync-repo"
   ]
 }

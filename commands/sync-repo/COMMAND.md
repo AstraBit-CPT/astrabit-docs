@@ -1,17 +1,32 @@
 ---
-name: sync-docs
-description: Sync and update documentation across all Astrabit-CPT repositories efficiently using parallel subagents.
+name: sync-repo
+description: Sync and update documentation for AstraBit repositories. Use a pattern to sync specific repos, or sync all repos by default.
+arguments:
+  - name: pattern
+    description: Repository name pattern (e.g., "user-service", "*gateway", "user-*"). If omitted, syncs all repos.
+    required: false
+    variadic: true
 ---
 
-# Sync Documentation
+# Sync Repository Documentation
 
-Synchronize documentation across all Astrabit-CPT repositories. Fetches the latest repository list, clones/updates repos, and updates documentation for repos with code changes.
+Synchronize documentation for AstraBit repositories. Syncs a specific repository, repositories matching a pattern, or all repositories.
 
 ## Usage
 
 ```
-/sync-docs [options]
+/sync-repo [pattern] [options]
+/sync-repo                           # Sync all repositories
+/sync-repo user-service              # Sync specific repository
+/sync-repo "*gateway"                # Sync repos matching pattern
+/sync-repo "user-*" "order-*"        # Sync repos matching multiple patterns
 ```
+
+## Arguments
+
+| Argument | Description | Required |
+|----------|-------------|----------|
+| `pattern` | Repository name pattern (supports wildcards: `*` and `?`) | No - defaults to all repos |
 
 ## Options
 
@@ -22,6 +37,15 @@ Synchronize documentation across all Astrabit-CPT repositories. Fetches the late
 | `--dry-run` | Show what would be updated without making changes | false |
 | `--force` | Update all repos, not just changed ones | false |
 | `--parallel` | Number of parallel subagents | 5 |
+
+## Ambiguous Name Handling
+
+If the pattern matches multiple repositories, the command will:
+1. Display all matching repositories
+2. Ask you to confirm which ones to sync
+3. Proceed with your selection
+
+If no pattern is provided, all repositories are synced.
 
 ## Workflow
 
@@ -35,7 +59,17 @@ gh repo list Astrabit-CPT --json name,url,updatedAt --limit 500
 
 **Prerequisite:** User must be authenticated with `gh auth login`.
 
-### 2. Clone/Update Repositories
+### 2. Pattern Matching
+
+If a pattern argument is provided:
+- Exact match: `user-service` → syncs only `user-service`
+- Wildcard suffix: `user-*` → syncs `user-service`, `user-api-gateway`, etc.
+- Wildcard prefix: `*gateway` → syncs `user-gateway`, `order-gateway`, etc.
+- Multiple patterns: `"user-*" "*gateway"` → syncs repos matching any pattern
+
+If no pattern is provided, all repositories are processed.
+
+### 3. Clone/Update Repositories
 
 For each repository:
 
@@ -53,7 +87,7 @@ For each repository:
 - Shallow clones save disk space and bandwidth
 - `--single-branch` ensures we only track the default branch
 
-### 3. Detect Changes
+### 4. Detect Changes
 
 Compare last commit date with last documentation update:
 
@@ -64,7 +98,7 @@ if last_commit_date > last_doc_update_date:
 
 Skips repos without code changes since last doc run (unless `--force` is used).
 
-### 4. Parallel Processing
+### 5. Parallel Processing
 
 Launch subagents IN PARALLEL to process repositories:
 
@@ -83,7 +117,7 @@ Each subagent:
 3. Generates/updates `README.md`, `INTEGRATIONS.md` if needed
 4. Returns summary of changes
 
-### 5. Generate Report
+### 6. Generate Report
 
 Produces a summary report:
 
@@ -128,7 +162,7 @@ Produces a summary report:
 Fetch repository list from GitHub:
 
 ```bash
-./commands/sync-docs/scripts/fetch-repos.sh --org Astrabit-CPT
+./commands/sync-repo/scripts/fetch-repos.sh --org Astrabit-CPT
 ```
 
 Output: JSON list of repositories with name, url, updatedAt.
@@ -138,7 +172,7 @@ Output: JSON list of repositories with name, url, updatedAt.
 Orchestrate the full sync process:
 
 ```bash
-./commands/sync-docs/scripts/sync-all.py --org Astrabit-CPT --repos-dir ./repos
+./commands/sync-repo/scripts/sync-all.py --org Astrabit-CPT --repos-dir ./repos
 ```
 
 This script:
@@ -150,8 +184,9 @@ This script:
 
 ## Example Output
 
+### Sync all repositories
 ```
-$ /sync-docs
+$ /sync-repo
 
 Fetching repositories from Astrabit-CPT...
 Found 47 repositories
@@ -185,6 +220,49 @@ Processing repos in parallel (5 concurrent)...
 | user-service | New dependency on auth-service | INTEGRATIONS.md |
 | api-gateway | New route to payment-service | catalog-info.yaml, routes table |
 | trade-service | New events: trade.executed | catalog-info.yaml |
+```
+
+### Sync specific repository
+```
+$ /sync-repo user-service
+
+Fetching repositories from Astrabit-CPT...
+Found repository: user-service
+
+Cloning/updating repository...
+✓ user-service (updated)
+
+# Documentation Sync Report
+
+## Summary
+- Processed: 1 repo
+- Updated: user-service
+```
+
+### Sync with pattern (ambiguous)
+```
+$ /sync-repo "*gateway"
+
+Fetching repositories from Astrabit-CPT...
+Found 5 repositories matching pattern "*gateway":
+  - user-gateway
+  - order-gateway
+  - strategy-gateway
+  - product-gateway
+  - payment-gateway
+
+Sync all 5 matching repositories? (y/n)
+```
+
+### Sync with pattern (exact match)
+```
+$ /sync-repo "user-service"
+
+Fetching repositories from Astrabit-CPT...
+Found exact match: user-service
+
+Cloning/updating repository...
+✓ user-service (updated)
 ```
 
 ## Troubleshooting
