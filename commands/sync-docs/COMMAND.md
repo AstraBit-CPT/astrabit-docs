@@ -38,10 +38,20 @@ gh repo list Astrabit-CPT --json name,url,updatedAt --limit 500
 ### 2. Clone/Update Repositories
 
 For each repository:
-- If exists: `git pull --shallow` (update)
-- If new: `git clone --depth 1` (shallow clone for speed)
 
-**Shallow clones** save bandwidth and time - only fetch latest commit.
+**Existing repos:**
+1. `git fetch origin` - Fetch latest from remote
+2. Detect default branch (main or master)
+3. `git reset --hard origin/{default-branch}` - Reset to latest commit
+
+**New repos:**
+1. `git clone --depth 1 --single-branch {url}` - Shallow clone
+
+**Why this approach:**
+- Always gets latest main/master branch
+- Uses `reset --hard` to avoid merge conflicts
+- Shallow clones save disk space and bandwidth
+- `--single-branch` ensures we only track the default branch
 
 ### 3. Detect Changes
 

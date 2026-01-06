@@ -50,6 +50,30 @@ def fetch_repos(org: str = "Astrabit-CPT") -> List[Dict[str, Any]]:
         return []
 
 
+def get_default_branch(repo_path: Path) -> str:
+    """Get the default branch (main or master) for a repository."""
+    # Try to get the default branch from origin
+    result = run_command(
+        ["git", "symbolic-ref", "refs/remotes/origin/HEAD"],
+        cwd=repo_path
+    )
+    if result.returncode == 0 and result.stdout:
+        # refs/remotes/origin/refs/heads/main -> main
+        branch = result.stdout.strip().split("/")[-1]
+        return branch
+
+    # Fallback: check if main or master exists
+    for branch in ["main", "master"]:
+        result = run_command(
+            ["git", "rev-parse", "--verify", f"origin/{branch}"],
+            cwd=repo_path
+        )
+        if result.returncode == 0:
+            return branch
+
+    return "main"  # Default fallback
+
+
 def clone_or_update_repo(repo: Dict[str, Any], repos_dir: Path) -> tuple[str, str]:
     """Clone or update a single repository. Returns (name, status)."""
     name = repo["name"]
@@ -59,31 +83,53 @@ def clone_or_update_repo(repo: Dict[str, Any], repos_dir: Path) -> tuple[str, st
     try:
         if repo_path.exists():
             # Update existing repo
+            # Step 1: Fetch all remotes
             result = run_command(
                 ["git", "fetch", "origin"],
                 cwd=repo_path
             )
-            if result.returncode == 0:
-                # Get last commit date
-                date_output = run_command(
-                    ["git", "log", "-1", "--format=%ci"],
-                    cwd=repo_path
-                )
-                last_commit = date_output.strip() if date_output else ""
-                return name, f"updated (last: {last_commit[:10]})"
-            else:
-                return name, "error"
+
+            if result.returncode != 0:
+                return name, "error (fetch failed)"
+
+            # Step 2: Get the default branch
+            default_branch = get_default_branch(repo_path)
+
+            # Step 3: Reset to latest origin/default-branch
+            result = run_command(
+                ["git", "reset", "--hard", f"origin/{default_branch}"],
+                cwd=repo_path
+            )
+
+            if result.returncode != 0:
+                return name, f"error (reset to {default_branch} failed)"
+
+            # Get last commit date and short hash
+            date_output = run_command(
+                ["git", "log", "-1", "--format=%h %ci"],
+                cwd=repo_path
+            )
+            last_commit = date_output.strip() if date_output else ""
+
+            return name, f"updated {default_branch} ({last_commit[:20]})"
         else:
-            # Clone new repo (shallow)
+            # Clone new repo (shallow, from default branch)
+            # Use --single-branch to reduce size and ensure we track the default branch
             result = subprocess.run(
-                ["git", "clone", "--depth", "1", url, str(repo_path)],
+                ["git", "clone", "--depth", "1", "--single-branch", url, str(repo_path)],
                 capture_output=True,
                 check=False
             )
             if result.returncode == 0:
-                return name, "cloned"
+                # Get the branch that was cloned
+                branch_output = run_command(
+                    ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                    cwd=repo_path
+                )
+                branch = branch_output.strip() if branch_output else "unknown"
+                return name, f"cloned ({branch})"
             else:
-                return name, "error"
+                return name, "error (clone failed)"
     except Exception as e:
         return name, f"error: {e}"
 

@@ -1,6 +1,10 @@
 # Cloned repositories
 repos/
 
+# Generated files from repos
+aggregated.json
+*.aggregated.json
+
 # IDE files
 .vscode/
 .idea/
