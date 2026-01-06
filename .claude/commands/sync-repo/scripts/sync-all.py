@@ -16,6 +16,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 
+# Import PR workflow for creating pull requests
+sys.path.insert(0, str(Path(__file__).parent))
+from pr_workflow import PRWorkflow, check_existing_pr, get_branch_name
+
 
 def run_command(cmd: List[str], cwd: Optional[Path] = None) -> str:
     """Run a command and return output."""
@@ -234,14 +238,18 @@ def process_repo_docs(name: str, repo_path: Path) -> Dict[str, Any]:
 
 
 def sync_docs(repos: List[Dict[str, Any]], repos_dir: Path,
-              parallel: int = 5, force: bool = False, dry_run: bool = False) -> Dict[str, Any]:
+              parallel: int = 5, force: bool = False, dry_run: bool = False,
+              org: str = "Astrabit-CPT", create_prs: bool = True) -> Dict[str, Any]:
     """Sync documentation across all repositories."""
     report = {
         "total": len(repos),
-        "updated": [],
-        "skipped": [],
-        "failed": [],
+        "updated": [],  # PRs created or changes made
+        "skipped": [],  # No changes needed or existing PRs
+        "failed": [],   # Errors during processing
     }
+
+    # Initialize PR workflow
+    workflow = PRWorkflow(org, repos_dir) if create_prs else None
 
     # Find repos that need updates
     need_update = []
@@ -262,6 +270,10 @@ def sync_docs(repos: List[Dict[str, Any]], repos_dir: Path,
 
     print(f"\nProcessing {len(need_update)} repos with changes...")
 
+    if create_prs:
+        branch_name = get_branch_name()
+        print(f"Using branch: {branch_name}")
+
     # Process in parallel (in real implementation, this would launch subagents)
     with ThreadPoolExecutor(max_workers=parallel) as executor:
         futures = {
@@ -272,19 +284,52 @@ def sync_docs(repos: List[Dict[str, Any]], repos_dir: Path,
         for future in as_completed(futures):
             try:
                 result = future.result()
-                if dry_run:
-                    report["updated"].append({
-                        "repo": result["name"],
-                        "changes": result["changes"],
-                        "docs": result["docs_updated"],
-                    })
+                repo_name = result["name"]
+
+                if not result["docs_updated"] and not result.get("changes"):
+                    # No docs needed updating
+                    report["skipped"].append(repo_name)
+                    continue
+
+                if create_prs and workflow:
+                    # Check for existing PR
+                    existing_pr = check_existing_pr(repo_name, org, workflow.branch_name)
+                    if existing_pr:
+                        report["skipped"].append(repo_name)
+                        print(f"  {repo_name}: skipped (existing PR #{existing_pr['number']})")
+                        continue
+
+                    if dry_run:
+                        # In dry run, just report what would happen
+                        report["updated"].append({
+                            "repo": repo_name,
+                            "changes": result.get("changes", []),
+                            "docs": result["docs_updated"],
+                            "pr_url": f"https://github.com/{org}/{repo_name}/pull/dry-run",
+                        })
+                    else:
+                        # TODO: Actually launch subagent to generate docs here
+                        # For now, just report what would be done
+                        report["updated"].append({
+                            "repo": repo_name,
+                            "changes": result.get("changes", []),
+                            "docs": result["docs_updated"],
+                            "pending_pr": True,  # PR would be created after docs generated
+                        })
                 else:
-                    # Actual processing would happen here
-                    report["updated"].append({
-                        "repo": result["name"],
-                        "changes": result["changes"],
-                        "docs": result["docs_updated"],
-                    })
+                    # No PR creation - just report
+                    if dry_run:
+                        report["updated"].append({
+                            "repo": repo_name,
+                            "changes": result.get("changes", []),
+                            "docs": result["docs_updated"],
+                        })
+                    else:
+                        report["updated"].append({
+                            "repo": repo_name,
+                            "changes": result.get("changes", []),
+                            "docs": result["docs_updated"],
+                        })
             except Exception as e:
                 name, _ = futures[future]
                 report["failed"].append({"repo": name, "error": str(e)})
@@ -305,12 +350,24 @@ def print_report(report: Dict[str, Any]):
 
     if report["updated"]:
         print(f"\n## Updated Repositories ({len(report['updated'])})")
-        print("| Repo | Changes | Docs Updated |")
-        print("|------|---------|--------------|")
-        for item in report["updated"]:
-            changes = ", ".join(item.get("changes", ["Code changes"]))
-            docs = ", ".join(item.get("docs", ["N/A"]))
-            print(f"| {item['repo']} | {changes} | {docs} |")
+
+        # Check if we have PR URLs to show
+        has_prs = any("pr_url" in item or "pending_pr" in item for item in report["updated"])
+
+        if has_prs:
+            print("| Repo | Changes | PR |")
+            print("|------|---------|-----|")
+            for item in report["updated"]:
+                changes = ", ".join(item.get("changes", ["Code changes"]))
+                pr_info = item.get("pr_url", "Pending...")
+                print(f"| {item['repo']} | {changes} | {pr_info} |")
+        else:
+            print("| Repo | Changes | Docs Updated |")
+            print("|------|---------|--------------|")
+            for item in report["updated"]:
+                changes = ", ".join(item.get("changes", ["Code changes"]))
+                docs = ", ".join(item.get("docs", ["N/A"]))
+                print(f"| {item['repo']} | {changes} | {docs} |")
 
     if report["skipped"] and len(report["skipped"]) <= 10:
         print(f"\n## Skipped Repositories")
@@ -342,10 +399,14 @@ def main():
                        help="Update all repos, not just changed ones")
     parser.add_argument("--dry-run", action="store_true",
                        help="Show what would be updated without making changes")
+    parser.add_argument("--no-pr", action="store_true",
+                       help="Skip PR creation and only update local files")
     args = parser.parse_args()
 
     repos_dir = Path(args.repos_dir)
     repos_dir.mkdir(parents=True, exist_ok=True)
+
+    create_prs = not args.no_pr
 
     # Fetch repository list
     print(f"Fetching repositories from {args.org}...")
@@ -357,6 +418,10 @@ def main():
 
     print(f"Found {len(repos)} repositories")
 
+    if create_prs:
+        branch_name = get_branch_name()
+        print(f"PR branch: {branch_name}")
+
     # Clone/update all repos
     clone_results = clone_or_update_all(repos, repos_dir, args.parallel)
 
@@ -367,7 +432,8 @@ def main():
         print(f"\nWarning: {errors} repos had errors during clone/update")
 
     # Sync documentation
-    report = sync_docs(repos, repos_dir, args.parallel, args.force, args.dry_run)
+    report = sync_docs(repos, repos_dir, args.parallel, args.force,
+                      args.dry_run, args.org, create_prs)
 
     # Print report
     print_report(report)

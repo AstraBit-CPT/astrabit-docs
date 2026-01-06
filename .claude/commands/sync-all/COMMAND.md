@@ -1,11 +1,11 @@
 ---
 name: sync-all
-description: Sync and update documentation for all AstraBit repositories in parallel.
+description: Sync and update documentation for all AstraBit repositories in parallel, creating PRs for changes.
 ---
 
 # Sync All Repository Documentation
 
-Synchronize documentation for all AstraBit repositories in parallel.
+Synchronize documentation for all AstraBit repositories in parallel. Creates pull requests for each repository with documentation changes.
 
 ## Usage
 
@@ -22,6 +22,7 @@ Synchronize documentation for all AstraBit repositories in parallel.
 | `--dry-run` | Show what would be updated without making changes | false |
 | `--force` | Update all repos, not just changed ones | false |
 | `--parallel` | Number of parallel subagents | 5 |
+| `--no-pr` | Skip PR creation and only update local files | false |
 
 ## Workflow
 
@@ -51,7 +52,11 @@ For each repository:
 
 Compare last commit date with last documentation update. Skips repos without code changes since last doc run (unless `--force` is used).
 
-### 4. Parallel Processing
+### 4. Check for Existing PRs
+
+Before processing each repository, checks if an open PR already exists from the doc sync workflow for today's branch (`chore/doc-sync-[date]`). Skips repos with existing PRs to avoid duplicates.
+
+### 5. Parallel Processing
 
 Launch subagents IN PARALLEL to process repositories (5 concurrent by default).
 
@@ -59,11 +64,24 @@ Each subagent:
 1. Analyzes the repository
 2. Generates/updates `catalog-info.yaml` if needed
 3. Generates/updates `README.md`, `INTEGRATIONS.md` if needed
-4. Returns summary of changes
+4. Creates a branch: `chore/doc-sync-[date]`
+5. Commits the documentation changes
+6. Pushes the branch to remote
+7. Creates a PR with standard title and body
+8. Returns summary with PR URL
 
-### 5. Generate Report
+### 6. Generate Report
 
-Produces a summary report with processed, updated, skipped, and failed counts.
+Produces a summary report with processed, updated, skipped, and failed counts, including PR URLs.
+
+## PR Creation
+
+Each repository with documentation changes gets:
+
+- **Branch name:** `chore/doc-sync-[date]` (e.g., `chore/doc-sync-2025-01-06`)
+- **PR title:** `docs: Update documentation ([date])`
+- **PR labels:** `documentation`, `automated`
+- **PR body:** Includes list of changes and files modified
 
 ## Example Output
 
@@ -72,6 +90,7 @@ $ /sync-all
 
 Fetching repositories from Astrabit-CPT...
 Found 47 repositories
+PR branch: chore/doc-sync-2025-01-06
 
 Cloning/updating repositories...
 ✓ api-gateway (updated)
@@ -82,26 +101,25 @@ Cloning/updating repositories...
 
 Detecting changes...
 12 repos need documentation updates
+3 repos skipped (existing PRs)
 
 Processing repos in parallel (5 concurrent)...
-[████████████████████████████████████████] 100%
 
 # Documentation Sync Report
 
 ## Summary
 - Processed: 47 repos
-- Updated: 12 repos
-- Skipped: 35 repos
+- Updated: 9 repos
+- Skipped: 38 repos
 - Failed: 0 repos
 
 ## Updated Repositories
 
-| Repo | Changes | Docs Updated |
-|------|---------|--------------|
-| order-service | New endpoints, new Kafka topic | README.md, catalog-info.yaml |
-| user-service | New dependency on auth-service | INTEGRATIONS.md |
-| api-gateway | New route to payment-service | catalog-info.yaml |
-| trade-service | New events: trade.executed | catalog-info.yaml |
+| Repo | Changes | PR |
+|------|---------|-----|
+| order-service | New endpoints, new Kafka topic | https://github.com/Astrabit-CPT/order-service/pull/123 |
+| user-service | New dependency on auth-service | https://github.com/Astrabit-CPT/user-service/pull/124 |
+| api-gateway | New route to payment-service | https://github.com/Astrabit-CPT/api-gateway/pull/125 |
 ```
 
 ## Troubleshooting
@@ -114,3 +132,6 @@ Processing repos in parallel (5 concurrent)...
 
 **Issue:** Parallel processing too slow
 - **Solution:** Adjust `--parallel` based on your system (try 10 or 15)
+
+**Issue:** Don't want to create PRs
+- **Solution:** Use `--no-pr` to only update local files without pushing or creating PRs
