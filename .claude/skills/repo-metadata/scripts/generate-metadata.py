@@ -13,6 +13,7 @@ import argparse
 import json
 import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Set
@@ -242,6 +243,9 @@ def generate_catalog_info(repo_path: Path) -> Dict:
     # Detect service type
     service_type = detect_service_type(integrations, repo_path)
 
+    # Detect domain and owner from patterns
+    domain, owner = detect_domain_and_owner(repo_path.name)
+
     # Extract description from README
     description = ""
     if docs.get("readme"):
@@ -259,13 +263,13 @@ def generate_catalog_info(repo_path: Path) -> Dict:
         "metadata": {
             "name": name,
             "description": description or f"{service_type} component",
-            "tags": [service_type, runtime],
+            "tags": [service_type, runtime, domain],
         },
         "spec": {
             "type": service_type,
-            "category": "backend" if service_type in ["service", "gateway", "worker"] else "platform",
-            "domain": "unknown",  # Needs manual input
-            "owner": "unknown",  # Needs manual input
+            "category": "frontend" if service_type == "frontend" else "backend",
+            "domain": domain,
+            "owner": owner,
             "lifecycle": "production",
             "runtime": runtime,
             "framework": framework,
@@ -306,28 +310,143 @@ def generate_catalog_info(repo_path: Path) -> Dict:
     return catalog
 
 
+def detect_domain_and_owner(repo_name: str) -> tuple[str, str]:
+    """Detect domain and owner from repository name patterns."""
+    # Domain patterns
+    domain_patterns = {
+        "trading": ["*gateway", "*service", "order-log", "trade-pair", "exchange",
+                    "tradingview", "copy", "bot", "portfolio", "position", "strategy",
+                    "signal", "commission", "promo-code", "payment", "nexus"],
+        "user": ["user-*", "glob-*", "kyc"],
+        "product": ["product-*"],
+        "infrastructure": ["devops", "*-iac", "docker-compose", "concourse",
+                          "proxy-manager", "event-bus", "uptime-watcher", "migrate-db"],
+        "data": ["public-data", "kline-crawler", "exchange-data", "indicator",
+                 "geometry", "ml-*", "*-adapter", "database-schema"],
+        "frontend": ["*-frontend", "*-web", "*-app", "*-panel", "web", "adex-*",
+                     "glob-*", "charting-library"],
+        "integrations": ["discord", "zammad", "wordpress", "mailhog", "keycloak"],
+        "platform": ["defi", "staking"],
+        "documentation": ["wiki", "docs"],
+    }
+
+    # Team patterns
+    team_patterns = {
+        "trading-team": ["*gateway", "*service", "exchange", "tradingview", "bot",
+                          "strategy", "signal", "commission", "position", "portfolio"],
+        "backend-team": ["user-*", "product-*", "payment", "kyc", "promo-code"],
+        "frontend-team": ["*-frontend", "*-web", "*-app", "*-panel", "adex-*", "glob-*"],
+        "infrastructure-team": ["devops", "*-iac", "docker-compose", "concourse"],
+        "data-team": ["*data", "*crawler", "indicator", "ml-*", "geometry"],
+        "platform-team": ["defi", "staking"],
+    }
+
+    def match(name: str, patterns: list) -> bool:
+        for pattern in patterns:
+            if "*" in pattern:
+                regex = "^" + pattern.replace("*", ".*") + "$"
+                if re.match(regex, name, re.IGNORECASE):
+                    return True
+            elif pattern.lower() in name.lower():
+                return True
+        return False
+
+    # Detect domain
+    domain = "unknown"
+    for d, patterns in domain_patterns.items():
+        if match(repo_name, patterns):
+            domain = d
+            break
+
+    # Detect team
+    team = "unknown"
+    for t, patterns in team_patterns.items():
+        if match(repo_name, patterns):
+            team = t
+            break
+
+    # Map team to owner format
+    owner_map = {
+        "trading-team": "trading-team",
+        "backend-team": "backend-team",
+        "frontend-team": "frontend-team",
+        "infrastructure-team": "infrastructure-team",
+        "data-team": "data-team",
+        "platform-team": "platform-team",
+    }
+    owner = owner_map.get(team, team)
+
+    return domain, owner
+
+
 def to_yaml(data: Dict, indent: int = 0) -> str:
     """Simple YAML converter for catalog info."""
     lines = []
 
-    def dump(obj, depth=0):
+    def dump(obj, depth=0, in_list=False):
         if isinstance(obj, dict):
+            if in_list and depth == 0:
+                # Top-level dict in list - just dump key-value pairs on same line
+                pass
             for k, v in obj.items():
                 if v is None:
                     continue
-                if isinstance(v, (dict, list)):
-                    lines.append("  " * depth + f"{k}:")
-                    dump(v, depth + 1)
+                if isinstance(v, dict):
+                    if v:
+                        lines.append("  " * depth + f"{k}:")
+                        dump(v, depth + 1, False)
+                elif isinstance(v, list):
+                    if v:
+                        lines.append("  " * depth + f"{k}:")
+                        dump(v, depth + 1, False)
                 else:
                     lines.append("  " * depth + f"{k}: {yaml_val(v)}")
         elif isinstance(obj, list):
             for item in obj:
-                lines.append("  " * depth + "-")
-                dump(item, depth + 1)
+                if isinstance(item, dict):
+                    # First line opens the dict
+                    first = True
+                    for k, v in item.items():
+                        if v is None:
+                            continue
+                        if first:
+                            # First key on same line as dash
+                            if isinstance(v, (dict, list)):
+                                if v:
+                                    lines.append("  " * depth + f"- {k}:")
+                                    dump(v, depth + 1, False)
+                                else:
+                                    lines.append("  " * depth + f"- {k}: null")
+                            else:
+                                lines.append("  " * depth + f"- {k}: {yaml_val(v)}")
+                            first = False
+                        else:
+                            # Subsequent keys indented
+                            if isinstance(v, dict):
+                                if v:
+                                    lines.append("  " * (depth + 1) + f"{k}:")
+                                    dump(v, depth + 2, False)
+                            elif isinstance(v, list):
+                                if v:
+                                    lines.append("  " * (depth + 1) + f"{k}:")
+                                    dump(v, depth + 2, False)
+                            else:
+                                lines.append("  " * (depth + 1) + f"{k}: {yaml_val(v)}")
+                elif isinstance(item, list):
+                    if item:
+                        lines.append("  " * depth + "-")
+                        dump(item, depth + 1, True)
+                else:
+                    lines.append("  " * depth + f"- {yaml_val(item)}")
 
     def yaml_val(v):
         if isinstance(v, bool):
             return "true" if v else "false"
+        if isinstance(v, str):
+            # Quote strings that have special characters or look like booleans
+            if v in ["true", "false", "null"] or v.startswith(":") or " " in v:
+                return f'"{v}"'
+            return v
         return str(v)
 
     dump(data)
